@@ -159,6 +159,58 @@ export function useHabits() {
     return metricsMap[dateKey];
   };
 
+  // Calculate current streak (consecutive days with all habits done)
+  const calculateStreak = useMemo(() => {
+    if (habits.length === 0) return { current: 0, best: 0 };
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    let currentStreak = 0;
+    let bestStreak = 0;
+    let tempStreak = 0;
+    
+    // Check up to 365 days back
+    for (let i = 0; i < 365; i++) {
+      const checkDate = new Date(today);
+      checkDate.setDate(today.getDate() - i);
+      const dateKey = checkDate.toISOString().split('T')[0];
+      
+      const allDone = habits.every(h => completionsMap[h.id]?.has(dateKey));
+      
+      if (allDone) {
+        tempStreak++;
+        if (i === currentStreak) {
+          currentStreak = tempStreak;
+        }
+      } else {
+        if (i === 0) {
+          // Today not done, check if yesterday was
+          currentStreak = 0;
+        } else if (tempStreak > 0 && currentStreak === 0) {
+          // First break after today
+          currentStreak = tempStreak;
+        }
+        bestStreak = Math.max(bestStreak, tempStreak);
+        tempStreak = 0;
+      }
+    }
+    bestStreak = Math.max(bestStreak, tempStreak);
+    
+    return { current: currentStreak, best: bestStreak };
+  }, [habits, completionsMap]);
+
+  // Export data for Google Sheets sync
+  const exportData = useMemo(() => {
+    return {
+      habits: habits.map(h => ({ id: h.id, name: h.name, goal: h.goal })),
+      completions: completions,
+      metrics: metrics,
+      streak: calculateStreak,
+      exportedAt: new Date().toISOString()
+    };
+  }, [habits, completions, metrics, calculateStreak]);
+
   return {
     habits,
     loading,
@@ -169,6 +221,8 @@ export function useHabits() {
     isHabitCompleted,
     getMetric,
     completionsMap,
-    metricsMap
+    metricsMap,
+    streak: calculateStreak,
+    exportData
   };
 }
