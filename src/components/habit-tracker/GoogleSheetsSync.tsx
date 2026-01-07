@@ -1,7 +1,31 @@
-import { useState } from 'react';
-import { Sheet, Loader2, Check, Download } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { 
+  Cloud, 
+  CloudOff, 
+  Loader2, 
+  Check, 
+  Download, 
+  ExternalLink,
+  RefreshCw,
+  AlertCircle
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import { useGoogleSheets } from '@/hooks/useGoogleSheets';
 import { useToast } from '@/hooks/use-toast';
+import { cn } from '@/lib/utils';
 
 interface GoogleSheetsSyncProps {
   exportData: {
@@ -14,110 +38,203 @@ interface GoogleSheetsSyncProps {
 }
 
 export function GoogleSheetsSync({ exportData }: GoogleSheetsSyncProps) {
-  const [syncing, setSyncing] = useState(false);
-  const [synced, setSynced] = useState(false);
   const { toast } = useToast();
+  const {
+    sheetInfo,
+    status,
+    hasGoogleConnection,
+    syncData,
+    downloadAsExcel,
+  } = useGoogleSheets();
 
-  const generateCSV = () => {
-    // Generate habits sheet data
-    const habitsData = exportData.habits.map(h => ({
-      Name: h.name,
-      Goal: h.goal,
-      Completions: exportData.completions.filter(c => c.habit_id === h.id).length
-    }));
+  const [justSynced, setJustSynced] = useState(false);
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState(true);
 
-    // Generate completions timeline
-    const completionsByDate: Record<string, Record<string, boolean>> = {};
-    exportData.completions.forEach(c => {
-      if (!completionsByDate[c.completion_date]) {
-        completionsByDate[c.completion_date] = {};
+  // Auto-sync when data changes (debounced)
+  useEffect(() => {
+    if (!autoSyncEnabled || !hasGoogleConnection || status.isSyncing) return;
+
+    const timer = setTimeout(() => {
+      if (sheetInfo.spreadsheetId && exportData.habits.length > 0) {
+        handleSync(true);
       }
-      const habit = exportData.habits.find(h => h.id === c.habit_id);
-      if (habit) {
-        completionsByDate[c.completion_date][habit.name] = true;
+    }, 5000); // 5 second debounce for auto-sync
+
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exportData.completions.length, exportData.metrics.length]);
+
+  const handleSync = useCallback(async (silent = false) => {
+    const success = await syncData(exportData);
+    
+    if (success) {
+      setJustSynced(true);
+      setTimeout(() => setJustSynced(false), 3000);
+      
+      if (!silent) {
+        toast({
+          title: '✅ Synced to Google Sheets',
+          description: 'Your data is up to date',
+        });
       }
-    });
+    }
+  }, [syncData, exportData, toast]);
 
-    // Create CSV content
-    let csv = 'HabitMaster Export\n';
-    csv += `Exported: ${new Date(exportData.exportedAt).toLocaleString()}\n`;
-    csv += `Current Streak: ${exportData.streak.current} days\n`;
-    csv += `Best Streak: ${exportData.streak.best} days\n\n`;
-    
-    csv += 'HABITS SUMMARY\n';
-    csv += 'Name,Goal,Total Completions\n';
-    habitsData.forEach(h => {
-      csv += `"${h.Name}",${h.Goal},${h.Completions}\n`;
-    });
-    
-    csv += '\nDAILY COMPLETIONS\n';
-    csv += 'Date,' + exportData.habits.map(h => `"${h.name}"`).join(',') + '\n';
-    
-    const dates = [...new Set(exportData.completions.map(c => c.completion_date))].sort();
-    dates.forEach(date => {
-      const row = [date];
-      exportData.habits.forEach(h => {
-        row.push(completionsByDate[date]?.[h.name] ? '✓' : '');
-      });
-      csv += row.join(',') + '\n';
-    });
+  const handleDownload = useCallback(() => {
+    downloadAsExcel(exportData);
+  }, [downloadAsExcel, exportData]);
 
-    csv += '\nWELLNESS METRICS\n';
-    csv += 'Date,Mood (1-5),Sleep Hours\n';
-    exportData.metrics.forEach(m => {
-      csv += `${m.metric_date},${m.mood || ''},${m.sleep_hours || ''}\n`;
-    });
+  const openSheet = useCallback(() => {
+    if (sheetInfo.spreadsheetUrl) {
+      window.open(sheetInfo.spreadsheetUrl, '_blank');
+    }
+  }, [sheetInfo.spreadsheetUrl]);
 
-    return csv;
+  // Render sync status indicator
+  const renderStatusIcon = () => {
+    if (status.isSyncing) {
+      return <Loader2 size={16} className="animate-spin" />;
+    }
+    if (justSynced) {
+      return <Check size={16} className="text-primary" />;
+    }
+    if (status.error || status.needsReauth) {
+      return <AlertCircle size={16} className="text-destructive" />;
+    }
+    if (status.isConnected) {
+      return <Cloud size={16} className="text-primary" />;
+    }
+    return <CloudOff size={16} className="text-muted-foreground" />;
   };
 
-  const handleSync = async () => {
-    setSyncing(true);
-    
-    // Simulate sync delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    const csv = generateCSV();
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `habitmaster_${new Date().toISOString().split('T')[0]}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+  // Show re-auth message if needed
+  if (status.needsReauth) {
+    return (
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex items-center gap-2 border-destructive/50 text-destructive"
+              onClick={() => {
+                toast({
+                  title: 'Re-authentication Required',
+                  description: 'Please sign out and sign in with Google again to restore sync.',
+                });
+              }}
+            >
+              <AlertCircle size={16} />
+              <span className="hidden sm:inline">Reconnect</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>Google session expired. Sign in again to sync.</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
 
-    setSyncing(false);
-    setSynced(true);
-    
-    toast({
-      title: 'Export Complete',
-      description: 'Your data has been exported. Import this CSV to Google Sheets via File → Import.'
-    });
-
-    setTimeout(() => setSynced(false), 3000);
-  };
+  // If not connected with Google, show simple download button
+  if (!hasGoogleConnection) {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={handleDownload}
+        className="flex items-center gap-2"
+      >
+        <Download size={16} />
+        <span className="hidden sm:inline">Download</span>
+      </Button>
+    );
+  }
 
   return (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={handleSync}
-      disabled={syncing}
-      className="flex items-center gap-2"
-    >
-      {syncing ? (
-        <Loader2 size={16} className="animate-spin" />
-      ) : synced ? (
-        <Check size={16} className="text-primary" />
-      ) : (
-        <Sheet size={16} />
-      )}
-      <span className="hidden sm:inline">
-        {syncing ? 'Exporting...' : synced ? 'Exported!' : 'Export to Sheets'}
-      </span>
-      <Download size={14} className="sm:hidden" />
-    </Button>
+    <DropdownMenu>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className={cn(
+                  "flex items-center gap-2 transition-all",
+                  status.isConnected && "border-primary/30",
+                  status.isSyncing && "animate-pulse"
+                )}
+              >
+                {renderStatusIcon()}
+                <span className="hidden sm:inline">
+                  {status.isSyncing 
+                    ? 'Syncing...' 
+                    : justSynced 
+                    ? 'Synced!' 
+                    : status.isConnected 
+                    ? 'Live Sync' 
+                    : 'Connect'}
+                </span>
+              </Button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent>
+            {status.isConnected ? (
+              <p>
+                {status.lastSynced 
+                  ? `Last synced: ${status.lastSynced.toLocaleTimeString()}`
+                  : 'Connected to Google Sheets'}
+              </p>
+            ) : (
+              <p>Click to sync with Google Sheets</p>
+            )}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuItem onClick={() => handleSync(false)} disabled={status.isSyncing}>
+          <RefreshCw size={16} className={cn("mr-2", status.isSyncing && "animate-spin")} />
+          {status.isConnected ? 'Sync Now' : 'Create & Sync Sheet'}
+        </DropdownMenuItem>
+
+        {status.isConnected && sheetInfo.spreadsheetUrl && (
+          <DropdownMenuItem onClick={openSheet}>
+            <ExternalLink size={16} className="mr-2" />
+            Open in Google Sheets
+          </DropdownMenuItem>
+        )}
+
+        <DropdownMenuSeparator />
+
+        <DropdownMenuItem onClick={handleDownload}>
+          <Download size={16} className="mr-2" />
+          Download as Excel
+        </DropdownMenuItem>
+
+        {status.isConnected && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem 
+              onClick={() => setAutoSyncEnabled(!autoSyncEnabled)}
+              className="text-muted-foreground"
+            >
+              <div className={cn(
+                "w-3 h-3 rounded-full mr-2",
+                autoSyncEnabled ? "bg-primary" : "bg-muted"
+              )} />
+              Auto-sync {autoSyncEnabled ? 'On' : 'Off'}
+            </DropdownMenuItem>
+          </>
+        )}
+
+        {status.lastSynced && (
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">
+            Last synced: {status.lastSynced.toLocaleTimeString()}
+          </div>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
