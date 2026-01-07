@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Flame, Target } from 'lucide-react';
+import { Target } from 'lucide-react';
 import {
   AreaChart,
   Area,
@@ -110,10 +110,6 @@ export function DashboardView({ currentDate }: DashboardViewProps) {
               <div>
                 <h3 className="text-foreground font-bold text-lg">Consistency Trend</h3>
                 <p className="text-xs text-muted-foreground font-medium">Daily completion rate vs Goal</p>
-              </div>
-              <div className="flex items-center gap-2 text-xs font-bold text-primary bg-secondary px-3 py-1.5 rounded-full border border-primary/20">
-                <Flame size={14} className="fill-primary" />
-                Active Streak
               </div>
             </div>
             <div className="flex-1 min-h-[280px] w-full">
