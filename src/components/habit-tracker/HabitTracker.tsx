@@ -7,17 +7,20 @@ import {
   ListTodo, 
   LayoutDashboard, 
   Grid3X3,
-  Loader2
+  Loader2,
+  BarChart3
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useHabits } from '@/hooks/useHabits';
 import { TodayView } from './TodayView';
 import { DashboardView } from './DashboardView';
 import { TrackerView } from './TrackerView';
+import { AnalyticsView } from './AnalyticsView';
 import { StreakCounter } from './StreakCounter';
 import { GoogleSheetsSync } from './GoogleSheetsSync';
+import { AICoach } from './AICoach';
 
-type TabType = 'today' | 'dashboard' | 'tracker';
+type TabType = 'today' | 'dashboard' | 'tracker' | 'analytics';
 
 export function HabitTracker() {
   const { signOut } = useAuth();
@@ -56,7 +59,7 @@ export function HabitTracker() {
             <StreakCounter current={streak.current} best={streak.best} />
           </div>
           
-          {activeTab !== 'today' && (
+          {(activeTab === 'dashboard' || activeTab === 'tracker') && (
             <div className="flex items-center bg-muted rounded-lg border border-border px-1 py-1">
               <button 
                 onClick={() => setCurrentDate(new Date(year, month - 1))} 
@@ -90,7 +93,11 @@ export function HabitTracker() {
         {activeTab === 'today' && <TodayView />}
         {activeTab === 'dashboard' && <DashboardView currentDate={currentDate} />}
         {activeTab === 'tracker' && <TrackerView currentDate={currentDate} />}
+        {activeTab === 'analytics' && <AnalyticsView />}
       </main>
+
+      {/* AI Coach Floating Button */}
+      <AICoach />
 
       {/* App Navigation */}
       <nav className="bg-card border-t border-border h-16 flex items-center justify-around pb-2 safe-area-bottom shadow-[0_-5px_15px_rgba(0,0,0,0.02)] z-30">
@@ -101,7 +108,7 @@ export function HabitTracker() {
           }`}
         >
           <div className={`p-1 rounded-full ${activeTab === 'today' ? 'bg-secondary' : ''}`}>
-            <ListTodo size={24} strokeWidth={activeTab === 'today' ? 2.5 : 2} />
+            <ListTodo size={22} strokeWidth={activeTab === 'today' ? 2.5 : 2} />
           </div>
           <span className="text-[10px] font-bold">Today</span>
         </button>
@@ -112,9 +119,20 @@ export function HabitTracker() {
           }`}
         >
           <div className={`p-1 rounded-full ${activeTab === 'dashboard' ? 'bg-secondary' : ''}`}>
-            <LayoutDashboard size={24} strokeWidth={activeTab === 'dashboard' ? 2.5 : 2} />
+            <LayoutDashboard size={22} strokeWidth={activeTab === 'dashboard' ? 2.5 : 2} />
           </div>
-          <span className="text-[10px] font-bold">Dashboard</span>
+          <span className="text-[10px] font-bold">Overview</span>
+        </button>
+        <button 
+          onClick={() => setActiveTab('analytics')} 
+          className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${
+            activeTab === 'analytics' ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          <div className={`p-1 rounded-full ${activeTab === 'analytics' ? 'bg-secondary' : ''}`}>
+            <BarChart3 size={22} strokeWidth={activeTab === 'analytics' ? 2.5 : 2} />
+          </div>
+          <span className="text-[10px] font-bold">Analytics</span>
         </button>
         <button 
           onClick={() => setActiveTab('tracker')} 
@@ -123,9 +141,9 @@ export function HabitTracker() {
           }`}
         >
           <div className={`p-1 rounded-full ${activeTab === 'tracker' ? 'bg-secondary' : ''}`}>
-            <Grid3X3 size={24} strokeWidth={activeTab === 'tracker' ? 2.5 : 2} />
+            <Grid3X3 size={22} strokeWidth={activeTab === 'tracker' ? 2.5 : 2} />
           </div>
-          <span className="text-[10px] font-bold">Tracker</span>
+          <span className="text-[10px] font-bold">Grid</span>
         </button>
       </nav>
     </div>
