@@ -12,10 +12,10 @@ serve(async (req) => {
 
   try {
     const { messages, habitData } = await req.json();
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY");
     
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
+    if (!OPENROUTER_API_KEY) {
+      throw new Error("OPENROUTER_API_KEY is not configured");
     }
 
     // Build context from habit data
@@ -54,38 +54,53 @@ Guidelines:
 - If they're struggling, be empathetic and offer practical tips
 - Focus on progress, not perfection`;
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...messages,
-        ],
-        stream: true,
-      }),
-    });
+    // Try primary model first, fallback to secondary
+    const models = [
+      "xiaomi/mimo-v2-flash:free",
+      "tngtech/deepseek-r1t2-chimera:free"
+    ];
 
-    if (!response.ok) {
-      if (response.status === 429) {
-        return new Response(JSON.stringify({ error: "Rate limits exceeded, please try again later." }), {
-          status: 429,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
+    let response;
+    let lastError;
+
+    for (const model of models) {
+      try {
+        response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://habitmaster.lovable.app",
+            "X-Title": "HabitMaster AI Coach",
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [
+              { role: "system", content: systemPrompt },
+              ...messages,
+            ],
+            stream: true,
+            max_tokens: 1000,
+          }),
         });
+
+        if (response.ok) {
+          console.log(`Successfully using model: ${model}`);
+          break;
+        } else {
+          const errorText = await response.text();
+          console.error(`Model ${model} failed:`, response.status, errorText);
+          lastError = errorText;
+        }
+      } catch (err) {
+        console.error(`Model ${model} error:`, err);
+        lastError = err;
       }
-      if (response.status === 402) {
-        return new Response(JSON.stringify({ error: "Payment required, please add funds to your workspace." }), {
-          status: 402,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      const errorText = await response.text();
-      console.error("AI gateway error:", response.status, errorText);
-      return new Response(JSON.stringify({ error: "AI service unavailable" }), {
+    }
+
+    if (!response || !response.ok) {
+      console.error("All models failed, last error:", lastError);
+      return new Response(JSON.stringify({ error: "AI service temporarily unavailable. Please try again." }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
