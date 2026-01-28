@@ -13,6 +13,9 @@ const NotFound = () => {
       <div className="text-center">
         <h1 className="mb-4 text-4xl font-bold">404</h1>
         <p className="mb-4 text-xl text-muted-foreground">Oops! Page not found</p>
+        <p className="mb-8 text-sm text-muted-foreground/80 font-mono bg-muted-foreground/10 py-2 px-4 rounded">
+          Route: {location.pathname}
+        </p>
         <a href="/" className="text-primary underline hover:text-primary/90">
           Return to Home
         </a>

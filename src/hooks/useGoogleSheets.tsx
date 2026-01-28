@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { useState, useCallback, useEffect } from 'react';
 import { useAuth } from './useAuth';
-import { useToast } from '@/hooks/use-toast';
+import { useToast } from './use-toast';
+import { createSpreadsheet, appendData, getSpreadsheet } from '@/utils/google-sheets';
+import { db } from '@/integrations/firebase/firebase';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 interface SheetInfo {
   spreadsheetId: string | null;
@@ -17,14 +19,10 @@ interface SyncStatus {
 }
 
 export function useGoogleSheets() {
-  const { session, user } = useAuth();
+  const userAuth = useAuth();
+  const { user } = userAuth;
   const { toast } = useToast();
-  
-  const [sheetInfo, setSheetInfo] = useState<SheetInfo>({
-    spreadsheetId: null,
-    spreadsheetUrl: null,
-  });
-  
+  const [sheetInfo, setSheetInfo] = useState<SheetInfo>({ spreadsheetId: null, spreadsheetUrl: null });
   const [status, setStatus] = useState<SyncStatus>({
     isConnected: false,
     isSyncing: false,
@@ -33,260 +31,218 @@ export function useGoogleSheets() {
     needsReauth: false,
   });
 
-  // Get Google access token from session
-  const getAccessToken = useCallback(() => {
-    return session?.provider_token || null;
-  }, [session]);
+  const getToken = () => sessionStorage.getItem('google_access_token');
 
-  // Check if user has Google connection
-  const hasGoogleConnection = useCallback(() => {
-    const provider = user?.app_metadata?.provider;
-    const providers = user?.app_metadata?.providers as string[] | undefined;
-    return provider === 'google' || providers?.includes('google') || false;
+  // Check for existing sheet ID in user profile
+  useEffect(() => {
+    if (!user) return;
+
+    const checkUserProfile = async () => {
+      try {
+        const userRef = doc(db, 'users', user.uid);
+        const userSnap = await getDoc(userRef);
+
+        if (userSnap.exists() && userSnap.data().spreadsheetId) {
+          const id = userSnap.data().spreadsheetId;
+          setSheetInfo({
+            spreadsheetId: id,
+            spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${id}`
+          });
+          setStatus(prev => ({ ...prev, isConnected: true }));
+        }
+      } catch (err) {
+        console.error('[useGoogleSheets] Error checking user profile:', err);
+      }
+    };
+
+    checkUserProfile();
   }, [user]);
 
-  // Fetch existing sheet info
-  const fetchSheetInfo = useCallback(async () => {
-    if (!session?.access_token) return;
+  const refreshSheetInfo = async () => {
+    const token = getToken();
+    const id = sheetInfo.spreadsheetId;
+
+    if (!token || !id) return;
 
     try {
-      const response = await supabase.functions.invoke('google-sheets-sync', {
-        body: { action: 'get-info' },
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
-
-      if (response.data?.spreadsheetId) {
-        setSheetInfo({
-          spreadsheetId: response.data.spreadsheetId,
-          spreadsheetUrl: response.data.spreadsheetUrl,
-        });
-        setStatus(prev => ({ ...prev, isConnected: true }));
+      const sheet = await getSpreadsheet(id, token);
+      if (!sheet) {
+        setStatus(prev => ({ ...prev, isConnected: false, error: 'Sheet not found' }));
+      } else {
+        setStatus(prev => ({ ...prev, isConnected: true, error: null }));
       }
-    } catch (error) {
-      console.log('No existing sheet found');
+    } catch (e) {
+      console.error('[useGoogleSheets] Check sheet error:', e);
+      setStatus(prev => ({ ...prev, needsReauth: true }));
     }
-  }, [session]);
+  };
 
-  // Create new spreadsheet
-  const createSpreadsheet = useCallback(async () => {
-    const accessToken = getAccessToken();
-    
-    if (!accessToken) {
-      setStatus(prev => ({ 
-        ...prev, 
-        needsReauth: true, 
-        error: 'Please sign in with Google to enable live sync' 
-      }));
+  const createSheet = async () => {
+    const token = getToken();
+    console.log('[useGoogleSheets] createSheet called. Token exists:', !!token, 'User:', user?.uid);
+
+    if (!user) {
+      toast({
+        variant: 'destructive',
+        title: 'Not Logged In',
+        description: 'Please log in first.',
+      });
+      return null;
+    }
+
+    if (!token) {
+      toast({
+        variant: 'destructive',
+        title: 'Google Not Connected',
+        description: 'Click "Connect Google Drive" to authorize.',
+      });
+      setStatus(prev => ({ ...prev, needsReauth: true }));
       return null;
     }
 
     setStatus(prev => ({ ...prev, isSyncing: true, error: null }));
 
     try {
-      const response = await supabase.functions.invoke('google-sheets-sync', {
-        body: { 
-          action: 'create',
-          accessToken 
-        },
-        headers: { Authorization: `Bearer ${session?.access_token}` },
+      console.log('[useGoogleSheets] Creating spreadsheet...');
+      const sheet = await createSpreadsheet('HabitMaster Tracker', token);
+      console.log('[useGoogleSheets] Spreadsheet created:', sheet);
+
+      const spreadsheetId = sheet.spreadsheetId;
+      const spreadsheetUrl = sheet.spreadsheetUrl;
+
+      // Initialize headers
+      console.log('[useGoogleSheets] Adding headers...');
+      await appendData(spreadsheetId, 'A1:E1', [[
+        'Date', 'Action', 'Habit Name', 'Value', 'Timestamp'
+      ]], token);
+
+      // Save ID to user profile
+      console.log('[useGoogleSheets] Saving to Firestore...');
+      const userRef = doc(db, 'users', user.uid);
+      await setDoc(userRef, { spreadsheetId }, { merge: true });
+
+      setSheetInfo({ spreadsheetId, spreadsheetUrl });
+      setStatus(prev => ({ ...prev, isConnected: true, isSyncing: false, error: null }));
+
+      toast({
+        title: '✅ Spreadsheet Created!',
+        description: 'Check your Google Drive for "HabitMaster Tracker".',
       });
 
-      if (response.data?.error) {
-        if (response.data.needsReauth) {
-          setStatus(prev => ({ 
-            ...prev, 
-            isSyncing: false, 
-            needsReauth: true,
-            error: response.data.message 
-          }));
-          return null;
-        }
-        throw new Error(response.data.error);
-      }
-
-      if (response.data?.spreadsheetId) {
-        setSheetInfo({
-          spreadsheetId: response.data.spreadsheetId,
-          spreadsheetUrl: response.data.spreadsheetUrl,
-        });
-        setStatus(prev => ({ 
-          ...prev, 
-          isConnected: true, 
-          isSyncing: false,
-          error: null 
-        }));
-        
-        toast({
-          title: '🎉 Spreadsheet Created!',
-          description: 'Your HabitMaster sheet is now live in Google Drive',
-        });
-
-        return response.data.spreadsheetId;
-      }
+      return spreadsheetUrl;
     } catch (error: any) {
-      setStatus(prev => ({ 
-        ...prev, 
-        isSyncing: false, 
-        error: error.message 
-      }));
+      console.error('[useGoogleSheets] Create sheet error:', error);
+
+      let errorMsg = error.message || 'Failed to create sheet';
+      if (errorMsg.includes('401') || errorMsg.includes('403')) {
+        errorMsg = 'Permission denied. Please reconnect Google Drive.';
+        setStatus(prev => ({ ...prev, needsReauth: true }));
+      }
+
       toast({
         variant: 'destructive',
-        title: 'Failed to create spreadsheet',
-        description: error.message,
+        title: 'Sync Failed',
+        description: errorMsg,
       });
+
+      setStatus(prev => ({ ...prev, isSyncing: false, error: errorMsg }));
+      return null;
     }
-    
-    return null;
-  }, [getAccessToken, session, toast]);
+  };
 
-  // Sync data to spreadsheet
-  const syncData = useCallback(async (exportData: any) => {
-    const accessToken = getAccessToken();
-    let currentSheetId = sheetInfo.spreadsheetId;
+  const syncData = async (exportData: any) => {
+    const token = getToken();
+    console.log('[useGoogleSheets] syncData called. SheetId:', sheetInfo.spreadsheetId, 'Token:', !!token);
 
-    if (!accessToken) {
-      setStatus(prev => ({ 
-        ...prev, 
-        needsReauth: true, 
-        error: 'Google access token expired. Please sign in again.' 
-      }));
+    if (!sheetInfo.spreadsheetId || !token) {
+      console.log('[useGoogleSheets] Cannot sync - missing sheet or token');
       return false;
     }
 
-    // Create sheet if doesn't exist
-    if (!currentSheetId) {
-      currentSheetId = await createSpreadsheet();
-      if (!currentSheetId) return false;
-    }
-
-    setStatus(prev => ({ ...prev, isSyncing: true, error: null }));
+    setStatus(prev => ({ ...prev, isSyncing: true }));
 
     try {
-      const response = await supabase.functions.invoke('google-sheets-sync', {
-        body: {
-          action: 'sync',
-          accessToken,
-          spreadsheetId: currentSheetId,
-          data: exportData,
-        },
-        headers: { Authorization: `Bearer ${session?.access_token}` },
-      });
+      const now = new Date();
+      const rows = [
+        [
+          now.toLocaleDateString(),
+          'SYNC',
+          'Daily Update',
+          `Streak: ${exportData.streak.current}`,
+          now.toISOString()
+        ]
+      ];
 
-      if (response.data?.error) {
-        if (response.data.needsReauth) {
-          setStatus(prev => ({ 
-            ...prev, 
-            isSyncing: false, 
-            needsReauth: true,
-            error: response.data.message 
-          }));
-          return false;
-        }
-        throw new Error(response.data.error);
-      }
+      await appendData(sheetInfo.spreadsheetId, 'Sheet1', rows, token);
 
-      setStatus(prev => ({ 
-        ...prev, 
-        isSyncing: false, 
-        lastSynced: new Date(),
-        error: null 
-      }));
-
+      setStatus(prev => ({ ...prev, isSyncing: false, lastSynced: new Date() }));
       return true;
     } catch (error: any) {
-      setStatus(prev => ({ 
-        ...prev, 
-        isSyncing: false, 
-        error: error.message 
-      }));
+      console.error('[useGoogleSheets] Sync error:', error);
+
+      if (error.message?.includes('401') || error.message?.includes('403')) {
+        setStatus(prev => ({ ...prev, needsReauth: true }));
+      }
+
+      setStatus(prev => ({ ...prev, isSyncing: false, error: 'Failed to sync' }));
       return false;
     }
-  }, [getAccessToken, sheetInfo.spreadsheetId, createSpreadsheet, session]);
+  };
 
-  // Download as Excel (XLSX via CSV that Excel can open)
-  const downloadAsExcel = useCallback((exportData: any) => {
-    const { habits, completions, metrics, streak } = exportData;
-    const today = new Date().toLocaleDateString();
+  const downloadAsExcel = (data: any) => {
+    // Generate CSV for download
+    const habits = data.habits || [];
+    const completions = data.completions || [];
 
-    // Build comprehensive CSV
-    let csv = '\ufeff'; // BOM for Excel UTF-8
-    csv += 'HABITMASTER EXPORT\n';
-    csv += `Generated on,${today}\n`;
-    csv += `Current Streak,${streak.current} days\n`;
-    csv += `Best Streak,${streak.best} days\n\n`;
-
-    // Habits summary
-    csv += 'HABITS SUMMARY\n';
-    csv += 'Name,Goal %,Total Completions\n';
+    let csv = 'Habit Name,Goal,Completions\n';
     habits.forEach((h: any) => {
       const count = completions.filter((c: any) => c.habit_id === h.id).length;
       csv += `"${h.name}",${h.goal},${count}\n`;
     });
-    csv += '\n';
 
-    // Daily completions grid
-    csv += 'DAILY COMPLETIONS\n';
-    csv += 'Date,' + habits.map((h: any) => `"${h.name}"`).join(',') + '\n';
-    
-    const dates = [...new Set(completions.map((c: any) => c.completion_date))]
-      .sort()
-      .reverse()
-      .slice(0, 90);
-    
-    dates.forEach((date: string) => {
-      const row = [date];
-      habits.forEach((h: any) => {
-        const done = completions.some(
-          (c: any) => c.habit_id === h.id && c.completion_date === date
-        );
-        row.push(done ? '✓' : '');
-      });
-      csv += row.join(',') + '\n';
-    });
-    csv += '\n';
-
-    // Wellness metrics
-    csv += 'WELLNESS METRICS\n';
-    csv += 'Date,Mood,Sleep (hours)\n';
-    metrics
-      .sort((a: any, b: any) => b.metric_date.localeCompare(a.metric_date))
-      .slice(0, 90)
-      .forEach((m: any) => {
-        const moodEmoji = ['', '😤', '😔', '😐', '😊', '🤩'][m.mood] || '';
-        csv += `${m.metric_date},${moodEmoji || m.mood || ''},${m.sleep_hours || ''}\n`;
-      });
-
-    // Trigger download
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `HabitMaster_${new Date().toISOString().split('T')[0]}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'habits_export.csv';
+    a.click();
     URL.revokeObjectURL(url);
 
-    toast({
-      title: '📥 Download Complete',
-      description: 'Open the CSV file with Excel or Google Sheets',
-    });
-  }, [toast]);
+    toast({ title: 'Downloaded', description: 'CSV file saved.' });
+  };
 
-  // Initial fetch
-  useEffect(() => {
-    if (hasGoogleConnection()) {
-      fetchSheetInfo();
+  const reAuthenticate = async () => {
+    console.log('[useGoogleSheets] reAuthenticate called');
+    const result = await userAuth.reauthenticateWithGoogle();
+
+    // Small delay to let sessionStorage update
+    await new Promise(r => setTimeout(r, 500));
+
+    const token = getToken();
+    console.log('[useGoogleSheets] After reauth, token exists:', !!token);
+
+    if (token) {
+      setStatus(prev => ({ ...prev, needsReauth: false, error: null }));
+      toast({ title: 'Connected!', description: 'Google Drive connected successfully.' });
+      return true;
+    } else {
+      toast({
+        variant: 'destructive',
+        title: 'Connection Failed',
+        description: 'Could not get access token. Try again.'
+      });
+      return false;
     }
-  }, [hasGoogleConnection, fetchSheetInfo]);
+  };
 
   return {
     sheetInfo,
     status,
-    hasGoogleConnection: hasGoogleConnection(),
-    createSpreadsheet,
+    hasGoogleConnection: !!getToken(),
+    createSpreadsheet: createSheet,
     syncData,
     downloadAsExcel,
-    refreshSheetInfo: fetchSheetInfo,
+    refreshSheetInfo,
+    reAuthenticate
   };
 }

@@ -1,5 +1,16 @@
-import { useState, useEffect, useMemo } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import {
+  collection,
+  doc,
+  getDocs,
+  addDoc,
+  deleteDoc,
+  setDoc,
+  query,
+  orderBy,
+  limit,
+} from 'firebase/firestore';
+import { db } from '@/integrations/firebase/firebase';
 import { useAuth } from './useAuth';
 
 export interface Habit {
@@ -10,6 +21,7 @@ export interface Habit {
 }
 
 export interface HabitCompletion {
+  id?: string;
   habit_id: string;
   completion_date: string;
 }
@@ -27,26 +39,55 @@ export function useHabits() {
   const [metrics, setMetrics] = useState<DailyMetric[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Fetch all data
+  // Fetch all data from Firestore
   useEffect(() => {
     if (!user) {
+      setHabits([]);
+      setCompletions([]);
+      setMetrics([]);
       setLoading(false);
       return;
     }
 
     const fetchData = async () => {
       setLoading(true);
-      
-      const [habitsRes, completionsRes, metricsRes] = await Promise.all([
-        supabase.from('habits').select('id, name, goal, sort_order').order('sort_order'),
-        supabase.from('habit_completions').select('habit_id, completion_date'),
-        supabase.from('daily_metrics').select('metric_date, mood, sleep_hours')
-      ]);
 
-      if (habitsRes.data) setHabits(habitsRes.data);
-      if (completionsRes.data) setCompletions(completionsRes.data);
-      if (metricsRes.data) setMetrics(metricsRes.data);
-      
+      try {
+        // Fetch habits
+        const habitsRef = collection(db, 'users', user.uid, 'habits');
+        const habitsQuery = query(habitsRef, orderBy('sort_order'));
+        const habitsSnapshot = await getDocs(habitsQuery);
+        const habitsData = habitsSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data(),
+        })) as Habit[];
+
+        // Fetch metrics
+        const metricsRef = collection(db, 'users', user.uid, 'metrics');
+        // Limit to prevent fetching entire history
+        const metricsQuery = query(metricsRef, limit(365));
+        const metricsSnapshot = await getDocs(metricsQuery);
+        const metricsData = metricsSnapshot.docs.map(doc => ({
+          ...doc.data(),
+        })) as DailyMetric[];
+
+        // Fetch recent completions optimization
+        const completionsRef = collection(db, 'users', user.uid, 'completions');
+        // In a real app we'd filter by date range, for now just limit volume
+        const completionsQuery = query(completionsRef, limit(2000));
+        const completionsSnapshot = await getDocs(completionsQuery);
+        const completionsData = completionsSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data(),
+        })) as HabitCompletion[];
+
+        setHabits(habitsData);
+        setCompletions(completionsData);
+        setMetrics(metricsData);
+      } catch (error) {
+        console.error('Error fetching data:', error);
+      }
+
       setLoading(false);
     };
 
@@ -72,92 +113,92 @@ export function useHabits() {
     return map;
   }, [metrics]);
 
-  const toggleHabit = async (habitId: string, date: Date) => {
+  const toggleHabit = useCallback(async (habitId: string, date: Date) => {
     if (!user) return;
-    
+
     const dateKey = date.toISOString().split('T')[0];
     const isCompleted = completionsMap[habitId]?.has(dateKey);
 
     if (isCompleted) {
-      // Delete completion
-      await supabase
-        .from('habit_completions')
-        .delete()
-        .eq('habit_id', habitId)
-        .eq('completion_date', dateKey);
-      
-      setCompletions(prev => prev.filter(c => !(c.habit_id === habitId && c.completion_date === dateKey)));
+      // Find and delete completion
+      const completion = completions.find(
+        c => c.habit_id === habitId && c.completion_date === dateKey
+      );
+      if (completion?.id) {
+        await deleteDoc(doc(db, 'users', user.uid, 'completions', completion.id));
+        setCompletions(prev =>
+          prev.filter(c => !(c.habit_id === habitId && c.completion_date === dateKey))
+        );
+      }
     } else {
       // Add completion
-      const { data } = await supabase
-        .from('habit_completions')
-        .insert({ habit_id: habitId, user_id: user.id, completion_date: dateKey })
-        .select()
-        .single();
-      
-      if (data) {
-        setCompletions(prev => [...prev, { habit_id: data.habit_id, completion_date: data.completion_date }]);
-      }
+      const completionsRef = collection(db, 'users', user.uid, 'completions');
+      const docRef = await addDoc(completionsRef, {
+        habit_id: habitId,
+        completion_date: dateKey,
+      });
+      setCompletions(prev => [
+        ...prev,
+        { id: docRef.id, habit_id: habitId, completion_date: dateKey },
+      ]);
     }
-  };
+  }, [user, completionsMap, completions]);
 
-  const addHabit = async (name: string) => {
+  const addHabit = useCallback(async (name: string) => {
     if (!user || !name.trim()) return;
-    
-    const maxOrder = Math.max(0, ...habits.map(h => h.sort_order));
-    const { data } = await supabase
-      .from('habits')
-      .insert({ user_id: user.id, name: name.trim(), goal: 100, sort_order: maxOrder + 1 })
-      .select()
-      .single();
-    
-    if (data) {
-      setHabits(prev => [...prev, { id: data.id, name: data.name, goal: data.goal, sort_order: data.sort_order }]);
-    }
-  };
 
-  const deleteHabit = async (habitId: string) => {
-    await supabase.from('habits').delete().eq('id', habitId);
+    const maxOrder = Math.max(0, ...habits.map(h => h.sort_order));
+    const habitsRef = collection(db, 'users', user.uid, 'habits');
+    const docRef = await addDoc(habitsRef, {
+      name: name.trim(),
+      goal: 100,
+      sort_order: maxOrder + 1,
+    });
+
+    setHabits(prev => [
+      ...prev,
+      { id: docRef.id, name: name.trim(), goal: 100, sort_order: maxOrder + 1 },
+    ]);
+  }, [user, habits]);
+
+  const deleteHabit = useCallback(async (habitId: string) => {
+    if (!user) return;
+
+    await deleteDoc(doc(db, 'users', user.uid, 'habits', habitId));
     setHabits(prev => prev.filter(h => h.id !== habitId));
     setCompletions(prev => prev.filter(c => c.habit_id !== habitId));
-  };
+  }, [user]);
 
-  const updateMetric = async (date: Date, type: 'mood' | 'sleep', value: number) => {
+  const updateMetric = useCallback(async (date: Date, type: 'mood' | 'sleep', value: number) => {
     if (!user) return;
-    
+
     const dateKey = date.toISOString().split('T')[0];
     const existing = metricsMap[dateKey];
 
     const newData = {
-      user_id: user.id,
       metric_date: dateKey,
       mood: type === 'mood' ? value : (existing?.mood ?? null),
-      sleep_hours: type === 'sleep' ? value : (existing?.sleep_hours ?? null)
+      sleep_hours: type === 'sleep' ? value : (existing?.sleep_hours ?? null),
     };
 
-    const { data } = await supabase
-      .from('daily_metrics')
-      .upsert(newData, { onConflict: 'user_id,metric_date' })
-      .select()
-      .single();
-    
-    if (data) {
-      setMetrics(prev => {
-        const filtered = prev.filter(m => m.metric_date !== dateKey);
-        return [...filtered, { metric_date: data.metric_date, mood: data.mood, sleep_hours: data.sleep_hours }];
-      });
-    }
-  };
+    const metricRef = doc(db, 'users', user.uid, 'metrics', dateKey);
+    await setDoc(metricRef, newData);
 
-  const isHabitCompleted = (habitId: string, date: Date) => {
+    setMetrics(prev => {
+      const filtered = prev.filter(m => m.metric_date !== dateKey);
+      return [...filtered, newData];
+    });
+  }, [user, metricsMap]);
+
+  const isHabitCompleted = useCallback((habitId: string, date: Date) => {
     const dateKey = date.toISOString().split('T')[0];
     return completionsMap[habitId]?.has(dateKey) ?? false;
-  };
+  }, [completionsMap]);
 
-  const getMetric = (date: Date) => {
+  const getMetric = useCallback((date: Date) => {
     const dateKey = date.toISOString().split('T')[0];
     return metricsMap[dateKey];
-  };
+  }, [metricsMap]);
 
   // Calculate current streak (consecutive days with all habits done)
   const calculateStreak = useMemo(() => {
@@ -165,19 +206,19 @@ export function useHabits() {
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+
     let currentStreak = 0;
     let bestStreak = 0;
     let tempStreak = 0;
-    
+
     // Check up to 365 days back
     for (let i = 0; i < 365; i++) {
       const checkDate = new Date(today);
       checkDate.setDate(today.getDate() - i);
       const dateKey = checkDate.toISOString().split('T')[0];
-      
+
       const allDone = habits.every(h => completionsMap[h.id]?.has(dateKey));
-      
+
       if (allDone) {
         tempStreak++;
         if (i === currentStreak) {
@@ -185,10 +226,8 @@ export function useHabits() {
         }
       } else {
         if (i === 0) {
-          // Today not done, check if yesterday was
           currentStreak = 0;
         } else if (tempStreak > 0 && currentStreak === 0) {
-          // First break after today
           currentStreak = tempStreak;
         }
         bestStreak = Math.max(bestStreak, tempStreak);
@@ -196,7 +235,7 @@ export function useHabits() {
       }
     }
     bestStreak = Math.max(bestStreak, tempStreak);
-    
+
     return { current: currentStreak, best: bestStreak };
   }, [habits, completionsMap]);
 
@@ -207,7 +246,7 @@ export function useHabits() {
       completions: completions,
       metrics: metrics,
       streak: calculateStreak,
-      exportedAt: new Date().toISOString()
+      exportedAt: new Date().toISOString(),
     };
   }, [habits, completions, metrics, calculateStreak]);
 
@@ -223,6 +262,6 @@ export function useHabits() {
     completionsMap,
     metricsMap,
     streak: calculateStreak,
-    exportData
+    exportData,
   };
 }

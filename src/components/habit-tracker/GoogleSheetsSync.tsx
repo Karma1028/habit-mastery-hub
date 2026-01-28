@@ -1,14 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
-import { 
-  Cloud, 
-  CloudOff, 
-  Loader2, 
-  Check, 
-  Download, 
+import {
+  Cloud,
+  CloudOff,
+  Loader2,
+  Check,
+  Download,
   ExternalLink,
   RefreshCw,
-  AlertCircle
+  AlertCircle,
+  AlertTriangle
 } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -45,6 +47,8 @@ export function GoogleSheetsSync({ exportData }: GoogleSheetsSyncProps) {
     hasGoogleConnection,
     syncData,
     downloadAsExcel,
+    createSpreadsheet,
+    reAuthenticate,
   } = useGoogleSheets();
 
   const [justSynced, setJustSynced] = useState(false);
@@ -65,20 +69,41 @@ export function GoogleSheetsSync({ exportData }: GoogleSheetsSyncProps) {
   }, [exportData.completions.length, exportData.metrics.length]);
 
   const handleSync = useCallback(async (silent = false) => {
+    // If no sheet ID, try creating one first
+    if (!sheetInfo.spreadsheetId && hasGoogleConnection) {
+      if (!silent) {
+        toast({ title: 'Setting up...', description: 'Creating your tracking sheet...' });
+      }
+
+      const url = await createSpreadsheet();
+      // If creation failed (e.g. auth error), stop here.
+      // createSpreadsheet handles setting status.error
+      if (!url) return;
+    }
+
     const success = await syncData(exportData);
-    
+
     if (success) {
       setJustSynced(true);
       setTimeout(() => setJustSynced(false), 3000);
-      
+
       if (!silent) {
         toast({
           title: '✅ Synced to Google Sheets',
           description: 'Your data is up to date',
         });
       }
+    } else if (!silent) {
+      // If sync failed despite having a sheet ID, it might be auth
+      if (!hasGoogleConnection) {
+        toast({
+          variant: 'destructive',
+          title: 'Sync Failed',
+          description: 'Please click "Connect" or log in with Google again.',
+        });
+      }
     }
-  }, [syncData, exportData, toast]);
+  }, [syncData, exportData, toast, sheetInfo.spreadsheetId, hasGoogleConnection, createSpreadsheet]);
 
   const handleDownload = useCallback(() => {
     downloadAsExcel(exportData);
@@ -107,49 +132,10 @@ export function GoogleSheetsSync({ exportData }: GoogleSheetsSyncProps) {
     return <CloudOff size={16} className="text-muted-foreground" />;
   };
 
-  // Show re-auth message if needed
-  if (status.needsReauth) {
-    return (
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              size="sm"
-              className="flex items-center gap-2 border-destructive/50 text-destructive"
-              onClick={() => {
-                toast({
-                  title: 'Re-authentication Required',
-                  description: 'Please sign out and sign in with Google again to restore sync.',
-                });
-              }}
-            >
-              <AlertCircle size={16} />
-              <span className="hidden sm:inline">Reconnect</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>
-            <p>Google session expired. Sign in again to sync.</p>
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-    );
-  }
 
-  // If not connected with Google, show simple download button
-  if (!hasGoogleConnection) {
-    return (
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={handleDownload}
-        className="flex items-center gap-2"
-      >
-        <Download size={16} />
-        <span className="hidden sm:inline">Download</span>
-      </Button>
-    );
-  }
+
+  // If not connected with Google, we still want to show the specific Connect/Reconnect option
+  // instead of just falling back to download only.
 
   return (
     <DropdownMenu>
@@ -163,41 +149,59 @@ export function GoogleSheetsSync({ exportData }: GoogleSheetsSyncProps) {
                 className={cn(
                   "flex items-center gap-2 transition-all",
                   status.isConnected && "border-primary/30",
-                  status.isSyncing && "animate-pulse"
+                  status.isSyncing && "animate-pulse",
+                  !status.isConnected && "text-muted-foreground"
                 )}
               >
                 {renderStatusIcon()}
                 <span className="hidden sm:inline">
-                  {status.isSyncing 
-                    ? 'Syncing...' 
-                    : justSynced 
-                    ? 'Synced!' 
-                    : status.isConnected 
-                    ? 'Live Sync' 
-                    : 'Connect'}
+                  {status.isSyncing
+                    ? 'Syncing...'
+                    : justSynced
+                      ? 'Synced!'
+                      : status.isConnected
+                        ? 'Live Sync'
+                        : 'Connect'}
                 </span>
               </Button>
             </DropdownMenuTrigger>
           </TooltipTrigger>
-          <TooltipContent>
-            {status.isConnected ? (
+          <TooltipContent side="bottom" className={cn("max-w-xs", status.error && "bg-destructive text-destructive-foreground border-destructive")}>
+            {status.error ? (
+              <div className="flex flex-col gap-1">
+                <span className="font-bold flex items-center gap-2">
+                  <AlertTriangle size={12} /> Sync Error
+                </span>
+                <span className="text-xs">{status.error}</span>
+                {!hasGoogleConnection && (
+                  <span className="text-[10px] mt-1 opacity-90 underline">Click to reconnect</span>
+                )}
+              </div>
+            ) : status.isConnected ? (
               <p>
-                {status.lastSynced 
+                {status.lastSynced
                   ? `Last synced: ${status.lastSynced.toLocaleTimeString()}`
                   : 'Connected to Google Sheets'}
               </p>
             ) : (
-              <p>Click to sync with Google Sheets</p>
+              <p>Click to connect Google Sheets</p>
             )}
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
 
       <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuItem onClick={() => handleSync(false)} disabled={status.isSyncing}>
-          <RefreshCw size={16} className={cn("mr-2", status.isSyncing && "animate-spin")} />
-          {status.isConnected ? 'Sync Now' : 'Create & Sync Sheet'}
-        </DropdownMenuItem>
+        {(hasGoogleConnection && !status.needsReauth) ? (
+          <DropdownMenuItem onClick={() => handleSync(false)} disabled={status.isSyncing}>
+            <RefreshCw size={16} className={cn("mr-2", status.isSyncing && "animate-spin")} />
+            {sheetInfo.spreadsheetUrl ? 'Sync Now' : 'Create & Sync Sheet'}
+          </DropdownMenuItem>
+        ) : (
+          <DropdownMenuItem onClick={() => reAuthenticate()}>
+            <Cloud size={16} className="mr-2" />
+            {(status.needsReauth || !hasGoogleConnection) ? 'Reconnect Google Drive' : 'Connect Google Drive'}
+          </DropdownMenuItem>
+        )}
 
         {status.isConnected && sheetInfo.spreadsheetUrl && (
           <DropdownMenuItem onClick={openSheet}>
@@ -216,7 +220,7 @@ export function GoogleSheetsSync({ exportData }: GoogleSheetsSyncProps) {
         {status.isConnected && (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuItem 
+            <DropdownMenuItem
               onClick={() => setAutoSyncEnabled(!autoSyncEnabled)}
               className="text-muted-foreground"
             >

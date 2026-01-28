@@ -17,7 +17,7 @@ export default function Auth() {
   const navigate = useNavigate();
   const { user, loading, signIn, signUp, signInWithGoogle } = useAuth();
   const { toast } = useToast();
-  
+
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -44,7 +44,7 @@ export default function Auth() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     const validation = authSchema.safeParse({ email, password });
     if (!validation.success) {
       toast({
@@ -56,17 +56,19 @@ export default function Auth() {
     }
 
     setIsSubmitting(true);
-    
+
     try {
       if (isLogin) {
         const { error } = await signIn(email, password);
         if (error) {
+          let desc = error.message;
+          if (error.message.includes('invalid-credential') || error.message.includes('invalid-login-credentials')) {
+            desc = 'Invalid password or account does not have a password (try Google Sign-In)';
+          }
           toast({
             variant: 'destructive',
             title: 'Login Failed',
-            description: error.message === 'Invalid login credentials' 
-              ? 'Invalid email or password. Please try again.'
-              : error.message
+            description: desc
           });
         }
       } else {
@@ -119,10 +121,11 @@ export default function Auth() {
         <div className="w-16 h-16 bg-secondary rounded-full flex items-center justify-center mx-auto mb-6">
           <Trophy size={32} className="text-primary" />
         </div>
-        
+
         {/* Title */}
         <h1 className="text-3xl font-bold text-foreground text-center mb-2">
           Habit<span className="text-primary">Master</span>
+          <span className="absolute -right-8 -top-2 text-[10px] text-muted-foreground font-mono bg-muted/50 px-1 rounded">v2.0 (Firebase)</span>
         </h1>
         <p className="text-muted-foreground text-center mb-6">
           {isLogin ? 'Welcome back! Login to sync your progress.' : 'Create an account to start tracking.'}
@@ -171,7 +174,7 @@ export default function Auth() {
               />
             </div>
           </div>
-          
+
           <div className="space-y-2">
             <Label htmlFor="password" className="text-sm font-medium text-foreground">Password</Label>
             <div className="relative">
@@ -189,8 +192,8 @@ export default function Auth() {
             </div>
           </div>
 
-          <Button 
-            type="submit" 
+          <Button
+            type="submit"
             className="w-full h-12 text-base font-semibold"
             disabled={isSubmitting}
           >
