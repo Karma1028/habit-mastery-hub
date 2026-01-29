@@ -12,12 +12,16 @@ import {
 } from 'firebase/firestore';
 import { db } from '@/integrations/firebase/firebase';
 import { useAuth } from './useAuth';
+import { useGamification } from './useGamification';
 
 export interface Habit {
   id: string;
   name: string;
   goal: number;
   sort_order: number;
+  // RPG System
+  xpReward?: number;
+  attribute?: 'STR' | 'INT' | 'WIS' | 'CHA' | 'DIS';
 }
 
 export interface HabitCompletion {
@@ -34,6 +38,7 @@ export interface DailyMetric {
 
 export function useHabits() {
   const { user } = useAuth();
+  const { gainXp } = useGamification();
   const [habits, setHabits] = useState<Habit[]>([]);
   const [completions, setCompletions] = useState<HabitCompletion[]>([]);
   const [metrics, setMetrics] = useState<DailyMetric[]>([]);
@@ -113,14 +118,40 @@ export function useHabits() {
     return map;
   }, [metrics]);
 
+
+
+
+  // --- SHEET SYNC HELPER ---
+  const syncToSheet = useCallback(async (action: 'HEADER' | 'TOGGLE', payload: any) => {
+    const token = sessionStorage.getItem('google_access_token');
+    const spreadsheetId = localStorage.getItem('sheet_id');
+
+    if (!token || !spreadsheetId) {
+      // Silent fail if not connected
+      return;
+    }
+
+    try {
+      const { syncHeaders, syncHabitToggle } = await import('@/utils/sheet-sync-manager');
+      if (action === 'HEADER') {
+        await syncHeaders(payload.habits, { spreadsheetId, token });
+      } else if (action === 'TOGGLE') {
+        await syncHabitToggle(payload.name, payload.date, payload.isCompleted, { spreadsheetId, token });
+      }
+    } catch (e) {
+      console.error("[Sheet Sync] Failed:", e);
+    }
+  }, []);
+
   const toggleHabit = useCallback(async (habitId: string, date: Date) => {
     if (!user) return;
 
     const dateKey = date.toISOString().split('T')[0];
     const isCompleted = completionsMap[habitId]?.has(dateKey);
+    const habit = habits.find(h => h.id === habitId);
 
     if (isCompleted) {
-      // Find and delete completion
+      // Find and delete completion (Undo)
       const completion = completions.find(
         c => c.habit_id === habitId && c.completion_date === dateKey
       );
@@ -129,6 +160,9 @@ export function useHabits() {
         setCompletions(prev =>
           prev.filter(c => !(c.habit_id === habitId && c.completion_date === dateKey))
         );
+
+        // SYNC: Set cell to FALSE (or clear it)
+        if (habit) syncToSheet('TOGGLE', { name: habit.name, date, isCompleted: false });
       }
     } else {
       // Add completion
@@ -141,10 +175,20 @@ export function useHabits() {
         ...prev,
         { id: docRef.id, habit_id: habitId, completion_date: dateKey },
       ]);
-    }
-  }, [user, completionsMap, completions]);
 
-  const addHabit = useCallback(async (name: string) => {
+      // --- RPG LOGIC ---
+      if (habit) {
+        const xp = habit.xpReward || 10;
+        const attr = habit.attribute || 'DIS';
+        gainXp(xp, attr);
+
+        // SYNC: Set cell to TRUE
+        syncToSheet('TOGGLE', { name: habit.name, date, isCompleted: true });
+      }
+    }
+  }, [user, completionsMap, completions, habits, gainXp, syncToSheet]);
+
+  const addHabit = useCallback(async (name: string, options?: { xp?: number, attribute?: string }) => {
     if (!user || !name.trim()) return;
 
     const maxOrder = Math.max(0, ...habits.map(h => h.sort_order));
@@ -153,11 +197,20 @@ export function useHabits() {
       name: name.trim(),
       goal: 100,
       sort_order: maxOrder + 1,
+      xpReward: options?.xp || 15,
+      attribute: options?.attribute || 'DIS',
     });
 
     setHabits(prev => [
       ...prev,
-      { id: docRef.id, name: name.trim(), goal: 100, sort_order: maxOrder + 1 },
+      {
+        id: docRef.id,
+        name: name.trim(),
+        goal: 100,
+        sort_order: maxOrder + 1,
+        xpReward: options?.xp || 15,
+        attribute: (options?.attribute || 'DIS') as any
+      },
     ]);
   }, [user, habits]);
 

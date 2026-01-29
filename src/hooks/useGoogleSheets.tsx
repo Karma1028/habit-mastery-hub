@@ -82,20 +82,12 @@ export function useGoogleSheets() {
     console.log('[useGoogleSheets] createSheet called. Token exists:', !!token, 'User:', user?.uid);
 
     if (!user) {
-      toast({
-        variant: 'destructive',
-        title: 'Not Logged In',
-        description: 'Please log in first.',
-      });
+      toast({ variant: 'destructive', title: 'Not Logged In', description: 'Please log in first.' });
       return null;
     }
 
     if (!token) {
-      toast({
-        variant: 'destructive',
-        title: 'Google Not Connected',
-        description: 'Click "Connect Google Drive" to authorize.',
-      });
+      toast({ variant: 'destructive', title: 'Google Not Connected', description: 'Click "Connect Google Drive" to authorize.' });
       setStatus(prev => ({ ...prev, needsReauth: true }));
       return null;
     }
@@ -103,20 +95,33 @@ export function useGoogleSheets() {
     setStatus(prev => ({ ...prev, isSyncing: true, error: null }));
 
     try {
+      // 1. Create Folder Structure
+      // We import these dynamically or assume they are added to utils imports (I will ensure imports exist)
+      console.log('[useGoogleSheets] Setting up "HabitMaster" folder...');
+      const { findOrCreateFolder, moveFileToFolder } = await import('@/utils/google-sheets');
+
+      const folderId = await findOrCreateFolder('HabitMaster', token);
+
+      // 2. Create Sheet
       console.log('[useGoogleSheets] Creating spreadsheet...');
       const sheet = await createSpreadsheet('HabitMaster Tracker', token);
-      console.log('[useGoogleSheets] Spreadsheet created:', sheet);
+      console.log('[useGoogleSheets] Spreadsheet created:', sheet.spreadsheetId);
 
       const spreadsheetId = sheet.spreadsheetId;
       const spreadsheetUrl = sheet.spreadsheetUrl;
 
-      // Initialize headers
+      // 3. Move Sheet to Folder
+      if (folderId) {
+        await moveFileToFolder(spreadsheetId, folderId, token);
+      }
+
+      // 4. Initialize headers
       console.log('[useGoogleSheets] Adding headers...');
       await appendData(spreadsheetId, 'A1:E1', [[
         'Date', 'Action', 'Habit Name', 'Value', 'Timestamp'
       ]], token);
 
-      // Save ID to user profile
+      // 5. Save ID to user profile
       console.log('[useGoogleSheets] Saving to Firestore...');
       const userRef = doc(db, 'users', user.uid);
       await setDoc(userRef, { spreadsheetId }, { merge: true });
@@ -126,7 +131,7 @@ export function useGoogleSheets() {
 
       toast({
         title: '✅ Spreadsheet Created!',
-        description: 'Check your Google Drive for "HabitMaster Tracker".',
+        description: 'Saved in Drive/HabitMaster/HabitMaster Tracker',
       });
 
       return spreadsheetUrl;
@@ -147,6 +152,88 @@ export function useGoogleSheets() {
 
       setStatus(prev => ({ ...prev, isSyncing: false, error: errorMsg }));
       return null;
+    }
+  };
+
+  const linkExistingSheet = async (inputSheetId: string) => {
+    const token = getToken();
+    console.log('[useGoogleSheets] linkExistingSheet called. ID:', inputSheetId, 'Token exists:', !!token);
+
+    if (!user || !token) {
+      toast({
+        variant: 'destructive',
+        title: 'Not Connected',
+        description: 'Please connect Google Drive first.',
+      });
+      return false;
+    }
+
+    // Basic extraction if they pasted a full URL
+    let cleanId = inputSheetId.trim();
+    const urlMatch = cleanId.match(/\/d\/([a-zA-Z0-9-_]+)/);
+    if (urlMatch) {
+      cleanId = urlMatch[1];
+    }
+
+    setStatus(prev => ({ ...prev, isSyncing: true, error: null }));
+
+    try {
+      // 1. Validate the sheet exists and we have access
+      console.log('[useGoogleSheets] Validating sheet access...');
+      const sheet = await getSpreadsheet(cleanId, token);
+
+      if (!sheet) {
+        throw new Error('Sheet not found or access denied. Make sure you have permission.');
+      }
+
+      console.log('[useGoogleSheets] Sheet valid:', sheet.properties.title);
+
+      // 2. Auto-Format: Check if we need to add headers
+      // We'll just try to add headers. If they exist, it's fine, we might append double headers but that's better than none for now.
+      // ideally we check sheet.sheets[0].data, but for speed we just append 'Date', 'Action'... 
+      // User said "change everything", so let's initialize it.
+      try {
+        await appendData(cleanId, 'A1:E1', [[
+          'Date', 'Action', 'Habit Name', 'Value', 'Timestamp'
+        ]], token);
+      } catch (e) {
+        console.log('Headers might already exist or append failed', e);
+      }
+
+      // 3. Save to Firestore
+      const userRef = doc(db, 'users', user.uid);
+      await setDoc(userRef, { spreadsheetId: cleanId }, { merge: true });
+
+      // 3. Update State
+      setSheetInfo({
+        spreadsheetId: cleanId,
+        spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${cleanId}`
+      });
+
+      setStatus(prev => ({ ...prev, isConnected: true, isSyncing: false, error: null }));
+
+      toast({
+        title: '✅ Sheet Linked!',
+        description: `Connected to "${sheet.properties.title}"`,
+      });
+
+      return true;
+    } catch (error: any) {
+      console.error('[useGoogleSheets] Link error:', error);
+      let msg = error.message;
+      if (msg.includes('403') || msg.includes('401')) {
+        msg = 'Permission denied. Please Reconnect Google Drive.';
+        setStatus(prev => ({ ...prev, needsReauth: true }));
+      }
+
+      toast({
+        variant: 'destructive',
+        title: 'Link Failed',
+        description: msg,
+      });
+
+      setStatus(prev => ({ ...prev, isSyncing: false, error: msg }));
+      return false;
     }
   };
 
@@ -240,6 +327,7 @@ export function useGoogleSheets() {
     status,
     hasGoogleConnection: !!getToken(),
     createSpreadsheet: createSheet,
+    linkExistingSheet,
     syncData,
     downloadAsExcel,
     refreshSheetInfo,

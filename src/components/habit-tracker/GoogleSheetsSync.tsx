@@ -25,6 +25,17 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Link2 } from 'lucide-react';
 import { useGoogleSheets } from '@/hooks/useGoogleSheets';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
@@ -49,10 +60,15 @@ export function GoogleSheetsSync({ exportData }: GoogleSheetsSyncProps) {
     downloadAsExcel,
     createSpreadsheet,
     reAuthenticate,
+    linkExistingSheet,
   } = useGoogleSheets();
 
   const [justSynced, setJustSynced] = useState(false);
   const [autoSyncEnabled, setAutoSyncEnabled] = useState(true);
+
+  const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false);
+  const [linkInput, setLinkInput] = useState('');
+  const [isLinking, setIsLinking] = useState(false);
 
   // Auto-sync when data changes (debounced)
   useEffect(() => {
@@ -67,6 +83,17 @@ export function GoogleSheetsSync({ exportData }: GoogleSheetsSyncProps) {
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [exportData.completions.length, exportData.metrics.length]);
+
+  const handleLinkSheet = async () => {
+    if (!linkInput.trim()) return;
+    setIsLinking(true);
+    const success = await linkExistingSheet(linkInput);
+    setIsLinking(false);
+    if (success) {
+      setIsLinkDialogOpen(false);
+      setLinkInput('');
+    }
+  };
 
   const handleSync = useCallback(async (silent = false) => {
     // If no sheet ID, try creating one first
@@ -138,107 +165,151 @@ export function GoogleSheetsSync({ exportData }: GoogleSheetsSyncProps) {
   // instead of just falling back to download only.
 
   return (
-    <DropdownMenu>
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                className={cn(
-                  "flex items-center gap-2 transition-all",
-                  status.isConnected && "border-primary/30",
-                  status.isSyncing && "animate-pulse",
-                  !status.isConnected && "text-muted-foreground"
-                )}
-              >
-                {renderStatusIcon()}
-                <span className="hidden sm:inline">
-                  {status.isSyncing
-                    ? 'Syncing...'
-                    : justSynced
-                      ? 'Synced!'
-                      : status.isConnected
-                        ? 'Live Sync'
-                        : 'Connect'}
-                </span>
-              </Button>
-            </DropdownMenuTrigger>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className={cn("max-w-xs", status.error && "bg-destructive text-destructive-foreground border-destructive")}>
-            {status.error ? (
-              <div className="flex flex-col gap-1">
-                <span className="font-bold flex items-center gap-2">
-                  <AlertTriangle size={12} /> Sync Error
-                </span>
-                <span className="text-xs">{status.error}</span>
-                {!hasGoogleConnection && (
-                  <span className="text-[10px] mt-1 opacity-90 underline">Click to reconnect</span>
-                )}
-              </div>
-            ) : status.isConnected ? (
-              <p>
-                {status.lastSynced
-                  ? `Last synced: ${status.lastSynced.toLocaleTimeString()}`
-                  : 'Connected to Google Sheets'}
-              </p>
-            ) : (
-              <p>Click to connect Google Sheets</p>
-            )}
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+    <>
+      <DropdownMenu>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={cn(
+                    "flex items-center gap-2 transition-all",
+                    status.isConnected && "border-primary/30",
+                    status.isSyncing && "animate-pulse",
+                    !status.isConnected && "text-muted-foreground"
+                  )}
+                >
+                  {renderStatusIcon()}
+                  <span className="hidden sm:inline">
+                    {status.isSyncing
+                      ? 'Syncing...'
+                      : justSynced
+                        ? 'Synced!'
+                        : status.isConnected
+                          ? 'Live Sync'
+                          : 'Connect'}
+                  </span>
+                </Button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className={cn("max-w-xs", status.error && "bg-destructive text-destructive-foreground border-destructive")}>
+              {status.error ? (
+                <div className="flex flex-col gap-1">
+                  <span className="font-bold flex items-center gap-2">
+                    <AlertTriangle size={12} /> Sync Error
+                  </span>
+                  <span className="text-xs">{status.error}</span>
+                  {!hasGoogleConnection && (
+                    <span className="text-[10px] mt-1 opacity-90 underline">Click to reconnect</span>
+                  )}
+                </div>
+              ) : status.isConnected ? (
+                <p>
+                  {status.lastSynced
+                    ? `Last synced: ${status.lastSynced.toLocaleTimeString()}`
+                    : 'Connected to Google Sheets'}
+                </p>
+              ) : (
+                <p>Click to connect Google Sheets</p>
+              )}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
 
-      <DropdownMenuContent align="end" className="w-56">
-        {(hasGoogleConnection && !status.needsReauth) ? (
-          <DropdownMenuItem onClick={() => handleSync(false)} disabled={status.isSyncing}>
-            <RefreshCw size={16} className={cn("mr-2", status.isSyncing && "animate-spin")} />
-            {sheetInfo.spreadsheetUrl ? 'Sync Now' : 'Create & Sync Sheet'}
-          </DropdownMenuItem>
-        ) : (
-          <DropdownMenuItem onClick={() => reAuthenticate()}>
-            <Cloud size={16} className="mr-2" />
-            {(status.needsReauth || !hasGoogleConnection) ? 'Reconnect Google Drive' : 'Connect Google Drive'}
-          </DropdownMenuItem>
-        )}
+        <DropdownMenuContent align="end" className="w-56">
+          {(hasGoogleConnection && !status.needsReauth) ? (
+            <>
+              <DropdownMenuItem onClick={() => handleSync(false)} disabled={status.isSyncing}>
+                <RefreshCw size={16} className={cn("mr-2", status.isSyncing && "animate-spin")} />
+                {sheetInfo.spreadsheetUrl ? 'Sync Now' : 'Create & Sync Sheet'}
+              </DropdownMenuItem>
 
-        {status.isConnected && sheetInfo.spreadsheetUrl && (
-          <DropdownMenuItem onClick={openSheet}>
-            <ExternalLink size={16} className="mr-2" />
-            Open in Google Sheets
-          </DropdownMenuItem>
-        )}
-
-        <DropdownMenuSeparator />
-
-        <DropdownMenuItem onClick={handleDownload}>
-          <Download size={16} className="mr-2" />
-          Download as Excel
-        </DropdownMenuItem>
-
-        {status.isConnected && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onClick={() => setAutoSyncEnabled(!autoSyncEnabled)}
-              className="text-muted-foreground"
-            >
-              <div className={cn(
-                "w-3 h-3 rounded-full mr-2",
-                autoSyncEnabled ? "bg-primary" : "bg-muted"
-              )} />
-              Auto-sync {autoSyncEnabled ? 'On' : 'Off'}
+              <DropdownMenuItem onClick={() => setIsLinkDialogOpen(true)}>
+                <Link2 size={16} className="mr-2" />
+                Link Existing Sheet
+              </DropdownMenuItem>
+            </>
+          ) : (
+            <DropdownMenuItem onClick={() => reAuthenticate()}>
+              <Cloud size={16} className="mr-2" />
+              {(status.needsReauth || !hasGoogleConnection) ? 'Reconnect Google Drive' : 'Connect Google Drive'}
             </DropdownMenuItem>
-          </>
-        )}
+          )}
 
-        {status.lastSynced && (
-          <div className="px-2 py-1.5 text-xs text-muted-foreground">
-            Last synced: {status.lastSynced.toLocaleTimeString()}
+          {status.isConnected && sheetInfo.spreadsheetUrl && (
+            <DropdownMenuItem onClick={openSheet}>
+              <ExternalLink size={16} className="mr-2" />
+              Open in Google Sheets
+            </DropdownMenuItem>
+          )}
+
+          <DropdownMenuSeparator />
+
+          <DropdownMenuItem onClick={handleDownload}>
+            <Download size={16} className="mr-2" />
+            Download as Excel
+          </DropdownMenuItem>
+
+          {status.isConnected && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => setAutoSyncEnabled(!autoSyncEnabled)}
+                className="text-muted-foreground"
+              >
+                <div className={cn(
+                  "w-3 h-3 rounded-full mr-2",
+                  autoSyncEnabled ? "bg-primary" : "bg-muted"
+                )} />
+                Auto-sync {autoSyncEnabled ? 'On' : 'Off'}
+              </DropdownMenuItem>
+            </>
+          )}
+
+          {status.lastSynced && (
+            <div className="px-2 py-1.5 text-xs text-muted-foreground">
+              Last synced: {status.lastSynced.toLocaleTimeString()}
+            </div>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <Dialog open={isLinkDialogOpen} onOpenChange={setIsLinkDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Link Existing Google Sheet</DialogTitle>
+            <DialogDescription>
+              Paste the full URL or ID of an existing Google Sheet. We will use this sheet for syncing.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="sheetId">Google Sheet URL or ID</Label>
+              <Input
+                id="sheetId"
+                placeholder="https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit"
+                value={linkInput}
+                onChange={(e) => setLinkInput(e.target.value)}
+              />
+            </div>
           </div>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsLinkDialogOpen(false)}>Cancel</Button>
+            <Button onClick={handleLinkSheet} disabled={isLinking || !linkInput.trim()}>
+              {isLinking ? (
+                <>
+                  <Loader2 size={16} className="mr-2 animate-spin" />
+                  Linking...
+                </>
+              ) : (
+                'Link Sheet'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

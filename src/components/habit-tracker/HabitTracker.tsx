@@ -26,7 +26,7 @@ export function HabitTracker() {
   const { signOut } = useAuth();
   const { habits, loading, streak, exportData, addHabit } = useHabits();
 
-  const [activeTab, setActiveTab] = useState<TabType>('today');
+  const [activeTab, setActiveTab] = useState<TabType>('dashboard');
   const [currentDate, setCurrentDate] = useState(new Date());
 
   const year = currentDate.getFullYear();

@@ -1,226 +1,180 @@
-import { useMemo } from 'react';
-import { Target } from 'lucide-react';
-import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  ReferenceLine
-} from 'recharts';
+import { useMemo, useState } from 'react';
 import { useHabits } from '@/hooks/useHabits';
+import { useGamification } from '@/hooks/useGamification';
 import { DailyProgressRing } from './DailyProgressRing';
+import { HeroProfile } from '../rpg/HeroProfile';
+import { SkillHexagon } from '../rpg/SkillHexagon';
+import { ActiveQuests } from '../rpg/ActiveQuests';
+import { AIContentWidget } from '../rpg/AIContentWidget';
+import { CharacterCreationWizard } from '../rpg/CharacterCreationWizard';
+import { Smile, Moon, Minus, Plus, Angry, Frown, Meh, Laugh, LucideIcon, Lock, Gift, Sparkles } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
 interface DashboardViewProps {
   currentDate: Date;
 }
 
-const getMonthDates = (year: number, month: number) => {
-  const dates: Date[] = [];
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  for (let d = 1; d <= daysInMonth; d++) {
-    dates.push(new Date(year, month, d));
-  }
-  return dates;
+const MOODS: Record<number, { icon: LucideIcon; colorClass: string; label: string }> = {
+  1: { icon: Angry, colorClass: 'text-mood-angry', label: 'Angry' },
+  2: { icon: Frown, colorClass: 'text-mood-bad', label: 'Bad' },
+  3: { icon: Meh, colorClass: 'text-mood-okay', label: 'Okay' },
+  4: { icon: Smile, colorClass: 'text-mood-good', label: 'Good' },
+  5: { icon: Laugh, colorClass: 'text-mood-great', label: 'Great' }
 };
 
 export function DashboardView({ currentDate }: DashboardViewProps) {
-  const { habits, isHabitCompleted } = useHabits();
-  
-  const today = new Date();
-  const todayKey = today.toISOString().split('T')[0];
-  
-  const year = currentDate.getFullYear();
-  const month = currentDate.getMonth();
-  const monthDates = useMemo(() => getMonthDates(year, month), [year, month]);
 
-  const todayCompleted = useMemo(() => 
-    habits.filter(h => isHabitCompleted(h.id, today)).length, 
+
+  const { habits, isHabitCompleted, updateMetric, getMetric } = useHabits();
+  const { stats } = useGamification();
+
+  const [showWizard, setShowWizard] = useState(false);
+
+  const today = new Date();
+
+  // Create memoized calculations to avoid re-renders
+  const todayCompleted = useMemo(() =>
+    habits.filter(h => isHabitCompleted(h.id, today)).length,
     [habits, isHabitCompleted, today]
   );
-  
+
   const todayRate = habits.length === 0 ? 0 : Math.round((todayCompleted / habits.length) * 100);
 
-  const dailyStats = useMemo(() => {
-    return monthDates.map(date => {
-      const completed = habits.filter(h => isHabitCompleted(h.id, date)).length;
-      const total = habits.length;
-      const rate = total === 0 ? 0 : Math.round((completed / total) * 100);
-      return {
-        date: date.toISOString().split('T')[0],
-        day: date.getDate(),
-        fullDate: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-        completed,
-        notDone: total - completed,
-        rate
-      };
-    });
-  }, [habits, monthDates, isHabitCompleted]);
+  const currentMetric = getMetric(today);
+  const currentMood = currentMetric?.mood || 0;
+  const currentSleep = currentMetric?.sleep_hours || 0;
 
-  const getHabitStats = (habitId: string) => {
-    let count = 0;
-    monthDates.forEach(d => {
-      if (isHabitCompleted(habitId, d)) count++;
-    });
-    const totalDays = monthDates.length;
-    return {
-      actual: totalDays,
-      done: count,
-      percentage: totalDays === 0 ? 0 : Math.round((count / totalDays) * 100)
-    };
-  };
+  // Trigger wizard if user has no habits (New User) or manually requested
+  const shouldShowWizard = habits.length === 0 || showWizard;
 
   return (
-    <div className="h-full overflow-y-auto p-4 md:p-8">
-      <div className="max-w-6xl mx-auto space-y-6 pb-20">
-        <div className="flex items-center justify-between animate-fade-in">
-          <div>
-            <h1 className="text-2xl font-extrabold text-foreground tracking-tight">Overview</h1>
-            <p className="text-sm text-muted-foreground font-medium">Monthly progress report</p>
-          </div>
-        </div>
+    <div className="h-full overflow-y-auto p-4 md:p-6 bg-background/50">
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {/* Today's Focus Ring */}
-          <div className="bg-card rounded-2xl shadow-card border border-border p-6 flex flex-col items-center justify-between relative overflow-hidden animate-fade-in" style={{ animationDelay: '0.1s' }}>
-            <div className="w-full flex justify-between items-start z-10">
-              <h3 className="text-muted-foreground text-xs font-bold uppercase tracking-wider">Today's Focus</h3>
-              <span className="bg-secondary text-secondary-foreground px-2 py-1 rounded text-xs font-bold">
-                {today.toLocaleDateString('en-US', { weekday: 'short' })}
-              </span>
-            </div>
-            <DailyProgressRing percentage={todayRate} />
-            <div className="w-full grid grid-cols-2 gap-3 z-10">
-              <div className="bg-muted border border-border p-3 rounded-xl text-center">
-                <span className="block text-lg font-bold text-foreground">{todayCompleted}</span>
-                <span className="text-[10px] text-muted-foreground font-bold uppercase">Done</span>
-              </div>
-              <div className="bg-muted border border-border p-3 rounded-xl text-center">
-                <span className="block text-lg font-bold text-foreground">{habits.length - todayCompleted}</span>
-                <span className="text-[10px] text-muted-foreground font-bold uppercase">Left</span>
-              </div>
-            </div>
-          </div>
+      {/* Onboarding Wizard */}
+      {shouldShowWizard && (
+        <CharacterCreationWizard onComplete={() => {
+          setShowWizard(false);
+        }} />
+      )}
 
-          {/* Consistency Trend Chart */}
-          <div className="md:col-span-2 bg-card rounded-2xl shadow-card border border-border p-6 flex flex-col animate-fade-in" style={{ animationDelay: '0.2s' }}>
-            <div className="flex justify-between items-center mb-6">
-              <div>
-                <h3 className="text-foreground font-bold text-lg">Consistency Trend</h3>
-                <p className="text-xs text-muted-foreground font-medium">Daily completion rate vs Goal</p>
+      <div className="max-w-7xl mx-auto pb-20 grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+        {/* LEFT COLUMN (65%) */}
+        <div className="lg:col-span-8 space-y-6">
+
+          {/* Top Row: Focus & Wellness */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+            {/* Today's Focus */}
+            <div className="bg-card rounded-2xl shadow-card border border-border p-6 flex flex-col items-center justify-between relative overflow-hidden">
+              <div className="w-full flex justify-between items-start z-10 mb-2">
+                <h3 className="text-muted-foreground text-xs font-bold uppercase tracking-wider">Today's Focus</h3>
+                <span className="bg-secondary text-secondary-foreground px-2 py-1 rounded text-xs font-bold">
+                  {today.toLocaleDateString('en-US', { weekday: 'short' })}
+                </span>
+              </div>
+              <div className="flex-1 flex items-center justify-center">
+                <DailyProgressRing percentage={todayRate} />
+              </div>
+              <div className="mt-4 text-center">
+                <p className="text-2xl font-black text-foreground">{todayRate}%</p>
+                <p className="text-xs text-muted-foreground font-bold uppercase">Daily Goal</p>
               </div>
             </div>
-            <div className="flex-1 min-h-[280px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={dailyStats} margin={{ top: 10, right: 0, left: -20, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="colorRate" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-                  <XAxis 
-                    dataKey="day" 
-                    axisLine={false} 
-                    tickLine={false} 
-                    tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 11, fontWeight: 600 }} 
-                    interval={4} 
-                    dy={10} 
-                  />
-                  <YAxis 
-                    hide={false} 
-                    axisLine={false} 
-                    tickLine={false} 
-                    tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }} 
-                    domain={[0, 100]} 
-                    ticks={[0, 50, 100]} 
-                  />
-                  <Tooltip 
-                    contentStyle={{ 
-                      borderRadius: '12px', 
-                      border: 'none', 
-                      boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)', 
-                      fontWeight: 'bold',
-                      backgroundColor: 'hsl(var(--card))'
-                    }} 
-                    itemStyle={{ color: 'hsl(var(--primary))' }} 
-                  />
-                  <ReferenceLine 
-                    y={80} 
-                    stroke="hsl(var(--destructive))" 
-                    strokeDasharray="3 3" 
-                    strokeWidth={2} 
-                    label={{ 
-                      position: 'top', 
-                      value: 'Goal (80%)', 
-                      fill: 'hsl(var(--destructive))', 
-                      fontSize: 10, 
-                      fontWeight: 700 
-                    }} 
-                  />
-                  <Area 
-                    type="monotone" 
-                    dataKey="rate" 
-                    stroke="hsl(var(--primary))" 
-                    strokeWidth={3} 
-                    fillOpacity={1} 
-                    fill="url(#colorRate)" 
-                    activeDot={{ r: 6, strokeWidth: 0, fill: 'hsl(var(--primary))' }} 
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </div>
 
-        {/* Habit Performance */}
-        <div className="bg-card rounded-2xl shadow-card border border-border overflow-hidden animate-fade-in" style={{ animationDelay: '0.3s' }}>
-          <div className="px-6 py-5 border-b border-border flex justify-between items-center bg-muted/30">
-            <h3 className="font-bold text-foreground text-lg">Habit Performance</h3>
-            <div className="flex items-center gap-1 text-xs text-muted-foreground font-medium">
-              <Target size={14} /> Monthly Goal
-            </div>
-          </div>
-          <div className="divide-y divide-border">
-            {habits.map(habit => {
-              const stats = getHabitStats(habit.id);
-              const isHigh = stats.percentage >= 80;
-              const isMed = stats.percentage >= 50 && stats.percentage < 80;
-              return (
-                <div key={habit.id} className="px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between hover:bg-muted/50 transition-colors gap-3">
-                  <div className="flex items-center gap-4 min-w-[150px]">
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm ${
-                      isHigh 
-                        ? 'bg-secondary text-primary' 
-                        : isMed 
-                          ? 'bg-warning/10 text-warning' 
-                          : 'bg-destructive/10 text-destructive'
-                    }`}>
-                      {stats.percentage}%
-                    </div>
-                    <div>
-                      <p className="font-bold text-foreground text-sm">{habit.name}</p>
-                      <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Score</p>
-                    </div>
-                  </div>
-                  <div className="flex-1 max-w-md flex items-center gap-3">
-                    <div className="flex-1 h-3 bg-muted rounded-full overflow-hidden">
-                      <div 
-                        className={`h-full rounded-full transition-all duration-1000 ease-out ${
-                          isHigh ? 'bg-primary' : isMed ? 'bg-warning' : 'bg-destructive'
-                        }`} 
-                        style={{ width: `${stats.percentage}%` }}
-                      />
-                    </div>
-                  </div>
+            {/* Wellness Check (Relocated) */}
+            <div className="bg-card rounded-2xl shadow-card border border-border p-6 flex flex-col justify-between">
+              <h3 className="text-muted-foreground text-xs font-bold uppercase tracking-wider mb-4">Wellness Check</h3>
+
+              {/* Mood */}
+              <div className="mb-6">
+                <div className="flex justify-between items-center bg-muted/50 p-2 rounded-xl">
+                  {[1, 2, 3, 4, 5].map(m => {
+                    const MIcon = MOODS[m].icon;
+                    const isSelected = currentMood === m;
+                    return (
+                      <button
+                        key={m}
+                        onClick={() => updateMetric(today, 'mood', m)}
+                        className={`transition-all transform duration-200 ${isSelected ? 'scale-125 text-primary' : 'text-muted-foreground hover:text-foreground opacity-50 hover:opacity-100'
+                          }`}
+                      >
+                        <MIcon size={24} className={isSelected ? MOODS[m].colorClass : ''} />
+                      </button>
+                    );
+                  })}
                 </div>
-              );
-            })}
+              </div>
+
+              {/* Sleep */}
+              <div className="flex items-center justify-between bg-muted/50 p-3 rounded-xl">
+                <span className="text-xs font-bold flex items-center gap-2"><Moon size={14} /> Sleep</span>
+                <div className="flex items-center gap-3">
+                  <button onClick={() => updateMetric(today, 'sleep', Math.max(0, currentSleep - 1))} className="hover:bg-background p-1 rounded"><Minus size={14} /></button>
+                  <span className="font-bold text-lg w-6 text-center">{currentSleep}</span>
+                  <button onClick={() => updateMetric(today, 'sleep', currentSleep + 1)} className="hover:bg-background p-1 rounded"><Plus size={14} /></button>
+                </div>
+              </div>
+            </div>
           </div>
+
+
+          {/* AI Content Widget */}
+          <AIContentWidget />
+
+          {/* Active Quests */}
+          <div className="bg-card/50 rounded-2xl border border-border p-6 backdrop-blur-sm min-h-[400px]">
+            <ActiveQuests />
+          </div>
+
         </div>
+
+        {/* RIGHT COLUMN (35%) - The HUD */}
+        <div className="lg:col-span-4 space-y-6">
+
+          {/* Actions Row */}
+          <div className="flex justify-end">
+            <Button variant="outline" size="sm" onClick={() => setShowWizard(true)} className="gap-2 border-primary/20 hover:bg-primary/10 hover:text-primary">
+              <Sparkles size={14} /> Recalibrate Plan
+            </Button>
+          </div>
+
+          {/* Hero Profile */}
+          <HeroProfile stats={stats} />
+
+          {/* Skill Hexagon */}
+          <SkillHexagon stats={stats} />
+
+          {/* Rewards Shop (Mini) */}
+          <div className="bg-gradient-to-br from-indigo-900/20 to-purple-900/20 rounded-2xl border border-indigo-500/20 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-foreground flex items-center gap-2">
+                <Gift size={18} className="text-purple-500" /> Rewards
+              </h3>
+              <span className="text-xs bg-purple-500/20 text-purple-300 px-2 py-1 rounded font-bold">Lvl 5 Unlock</span>
+            </div>
+
+            <div className="space-y-3">
+              <div className="bg-background/40 p-3 rounded-xl flex items-center gap-3 opacity-50">
+                <div className="p-2 bg-muted rounded-lg"><Lock size={16} /></div>
+                <div>
+                  <p className="text-sm font-bold">Dark Mode+</p>
+                  <p className="text-[10px] text-muted-foreground">Unlock 'Midnight' Theme</p>
+                </div>
+              </div>
+              <div className="bg-background/40 p-3 rounded-xl flex items-center gap-3 opacity-50">
+                <div className="p-2 bg-muted rounded-lg"><Lock size={16} /></div>
+                <div>
+                  <p className="text-sm font-bold">New Avatar</p>
+                  <p className="text-[10px] text-muted-foreground">Unlock 'Warrior' Badge</p>
+                </div>
+              </div>
+            </div>
+            <Button variant="ghost" className="w-full mt-4 text-xs h-8">View All Rewards</Button>
+          </div>
+
+        </div>
+
       </div>
     </div>
   );
